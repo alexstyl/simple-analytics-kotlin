@@ -10,10 +10,10 @@ Send events and pageviews from your Kotlin app to [Simple Analytics](https://sim
 
 - **Events with details:** count what people do, such as `buy_clicked` with `source=toolbar`.
 - **Pageviews for app screens:** see your app's screens in the dashboard's pages report, just like a website.
-- **Country, language and screen reports:** send the computer's timezone, language and screen size so the dashboard can break visitors down.
-- **Never slows down or crashes your app:** events are sent on a background thread, and failures are dropped silently.
-- **Mistakes caught early:** invalid event names, page paths without a leading `/`, and user agents that Simple Analytics would count as bots throw an exception as soon as you use them.
-- **No dependencies:** uses only the JDK's HTTP client.
+- **Country, language and screen reports out of the box:** the computer's timezone, language and screen size are sent automatically.
+- **Accurate visitor counts:** each run of your app counts as one visit, not every screen it shows.
+- **Never slows down or crashes your app:** events are sent on a background thread. Invalid names, failed requests and network errors are logged and dropped, never thrown.
+- **No dependencies:** uses only the JDK.
 
 ## Installation
 
@@ -43,15 +43,15 @@ dependencies {
 
 ## Quick start
 
-First add your app as a website in the Simple Analytics dashboard, using a hostname such as `app.example.com`. Then send your first event by creating a `SimpleAnalytics` with that hostname and your app's user agent, and calling `track()`:
+First add your app as a website in the Simple Analytics dashboard, using a hostname such as `app.example.com`. Then send your first event by creating a `SimpleAnalytics` with that hostname and your app's name and version, and calling `track()`:
 
 ```kotlin
-val analytics = SimpleAnalytics(hostname = "app.example.com", userAgent = "MyApp/1.0.0")
+val analytics = SimpleAnalytics(hostname = "app.example.com", appName = "MyApp", appVersion = "1.0.0")
 
 analytics.track("app_opened")
 ```
 
-`app_opened` shows up in the dashboard's events report for `app.example.com`.
+`app_opened` shows up in the dashboard's events report for `app.example.com`, along with the visitor's country, language, operating system and screen size.
 
 ## Examples
 
@@ -63,7 +63,7 @@ To tell apart which button people clicked, pass details as metadata to `track()`
 analytics.track("buy_clicked", mapOf("source" to "toolbar"))
 ```
 
-Event names can only contain lowercase letters, digits and underscores.
+Event names can only contain lowercase letters, digits and underscores. Other names are logged and not sent.
 
 ### Track screen views
 
@@ -75,40 +75,51 @@ analytics.pageview("/settings")
 
 Each screen appears in the dashboard's pages report. Call it from your navigation code rather than from UI code that can run many times for the same screen.
 
-### See visitors' countries and languages
+### Count visitors
 
-Simple Analytics works out a visitor's country from their timezone. To get country, language and screen size reports, pass a `Visitor` with the computer's settings:
+The dashboard counts a visitor for the first pageview each `SimpleAnalytics` sends, so create one when your app starts and use it for the whole run. Its visitors are then your app's runs:
 
 ```kotlin
-val screen = Toolkit.getDefaultToolkit().screenSize
-val analytics = SimpleAnalytics(
-    hostname = "app.example.com",
-    userAgent = "MyApp/1.0.0 (macOS 15.1; aarch64)",
-    visitor = Visitor(
-        timezone = TimeZone.getDefault().id,
-        language = Locale.getDefault().toLanguageTag(),
-        screenWidth = screen.width,
-        screenHeight = screen.height,
-    ),
-)
+val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0")
+
+analytics.pageview("/")        // a visitor
+analytics.pageview("/settings") // not a new visitor
 ```
 
-Without a `Visitor`, events and pageviews are still counted, but with no country, language or screen size.
+### Send queued events when the app quits
+
+Events are sent in the background, so ones recorded right before your app exits can be lost. To send them, call `close()` when your app quits. It waits up to 2 seconds for queued events:
+
+```kotlin
+Runtime.getRuntime().addShutdownHook(Thread { analytics.close() })
+```
 
 ### Turn off analytics in development builds
 
-To keep test runs and debug builds out of your numbers, use `Analytics.None` there. It accepts the same calls and sends nothing:
+To keep test runs and debug builds out of your numbers, only create a `SimpleAnalytics` in release builds and call it with `?.`:
 
 ```kotlin
-val analytics: Analytics = if (isRelease) SimpleAnalytics("app.example.com", "MyApp/1.0.0") else Analytics.None
+val analytics = if (isRelease) SimpleAnalytics("app.example.com", "MyApp", "1.0.0") else null
+
+analytics?.track("app_opened")
 ```
 
-### See what would be sent
+### Leave out the visitor's country, language and screen
 
-To inspect the JSON instead of sending it, for example while debugging, replace how the payload is posted:
+To send none of the computer's settings, pass `device = null`:
 
 ```kotlin
-val analytics = SimpleAnalytics("app.example.com", "MyApp/1.0.0", post = { json -> println(json) })
+val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", device = null)
+```
+
+You can also pass your own `DeviceInfo`, for example with the size of the screen your window is on.
+
+### Use your own user agent
+
+The user agent defaults to your app's name and version plus the operating system and processor, such as `MyApp/1.0.0 (Mac OS X 15.1; aarch64)`. Simple Analytics shows the operating system from it. To send a different one, pass `userAgent`:
+
+```kotlin
+val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", userAgent = "MyApp/1.0.0 (+https://example.com)")
 ```
 
 ## Troubleshooting
@@ -117,6 +128,10 @@ val analytics = SimpleAnalytics("app.example.com", "MyApp/1.0.0", post = { json 
 
 Check that `hostname` exactly matches a website you added in Simple Analytics, such as `app.example.com`. The dashboard only shows data for the websites in your account.
 
-### "The user agent would be counted as a robot"
+### "Simple Analytics will count … as a robot"
 
-Simple Analytics leaves out traffic from user agents containing `bot`, `spider`, `crawl` or `agent`. Choose a user agent without those words, such as `MyApp/1.0.0` instead of `MyApp Agent/1.0.0`.
+Simple Analytics leaves out traffic from user agents containing `bot`, `spider`, `crawl` or `agent`. Choose an app name or user agent without those words, such as `MyApp` instead of `MyApp Agent`.
+
+### "Not sent to Simple Analytics"
+
+An event name or path was invalid. Event names can only contain lowercase letters, digits and underscores, and paths must start with `/`.
