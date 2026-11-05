@@ -1,6 +1,4 @@
-![Simple Analytics dashboard showing a Kotlin app's pageviews, events and visitor countries]()
-
-_Demo idea: the Simple Analytics dashboard for an app, with screens listed as pages, funnel events and a country map._
+![Simple Analytics for Kotlin: the Kotlin logo pointing to the Simple Analytics bars](.github/header.png)
 
 # Simple Analytics for Kotlin
 
