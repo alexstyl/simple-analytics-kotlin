@@ -1,0 +1,3 @@
+name: simple-analytics-kotlin
+description: Sends events and pageviews to Simple Analytics from Kotlin apps, without cookies or identifiers.
+version: 0.1.0
