@@ -10,6 +10,7 @@ Send events and pageviews from your Kotlin app to [Simple Analytics](https://sim
 - **Pageviews for app screens:** see your app's screens in the dashboard's pages report, just like a website.
 - **Country, language and screen reports out of the box:** the computer's timezone, language and screen size are sent automatically.
 - **Accurate visitor counts:** each run of your app counts as one visit, not every screen it shows.
+- **Works offline:** events recorded without a connection wait and are sent once it's back, landing on the day they happened. They can even survive the app quitting.
 - **Never slows down or crashes your app:** events are sent on a background thread. Invalid names, failed requests and network errors are logged and dropped, never thrown.
 - **No dependencies:** uses only the JDK.
 
@@ -84,9 +85,19 @@ analytics.pageview("/")        // a visitor
 analytics.pageview("/settings") // not a new visitor
 ```
 
-### Send queued events when the app quits
+### Keep events recorded offline
 
-Events are sent in the background, so ones recorded right before your app exits can be lost. To send them, call `close()` when your app quits. It waits up to 2 seconds for queued events:
+When the computer is offline, events wait and are retried with increasing delays, up to every 5 minutes. They keep the time they happened, so they land on the right day in the dashboard. By default they wait in memory and are lost if the app quits first. To keep them until the next run, pass a `queueDirectory`, such as your app's data folder:
+
+```kotlin
+val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", queueDirectory = File(appDataDir, "analytics"))
+```
+
+Up to 1000 events wait at a time, and events older than 72 hours are dropped. Use one `SimpleAnalytics` per hostname and directory.
+
+### Send events right before the app quits
+
+Events are sent in the background, so ones recorded right before your app exits can be lost. Call `close()` when your app quits. It gives them up to 2 seconds to be sent; with a `queueDirectory`, any still waiting are sent on the next run:
 
 ```kotlin
 Runtime.getRuntime().addShutdownHook(Thread { analytics.close() })
@@ -133,3 +144,7 @@ Simple Analytics leaves out traffic from user agents containing `bot`, `spider`,
 ### "Not sent to Simple Analytics"
 
 An event name or path was invalid. Event names can only contain lowercase letters, digits and underscores, and paths must start with `/`.
+
+### "Simple Analytics refused … with 403"
+
+Simple Analytics doesn't accept data for a hostname that isn't in an account. Check the `hostname` against your dashboard.
