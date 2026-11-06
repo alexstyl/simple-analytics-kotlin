@@ -14,7 +14,7 @@ jobs:
     uses: composablehorizons/.github/.github/workflows/library-release.yml@main
     with:
       bump: ${{ inputs.bump }}
-      test-command: test
+      test-command: allTests
       runs-on: ubuntu-latest
     permissions:
       contents: write
