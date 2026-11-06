@@ -16,29 +16,15 @@ Send events and pageviews from your Kotlin app to [Simple Analytics](https://sim
 
 ## Installation
 
-The library isn't on Maven Central yet. Clone it next to your project:
-
-```sh
-git clone https://github.com/alexstyl/simple-analytics-kotlin.git
-```
-
-Include it as a composite build in your `settings.gradle.kts`:
-
-```kotlin
-includeBuild("../simple-analytics-kotlin") {
-    dependencySubstitution {
-        substitute(module("com.alexstyl:simple-analytics-kotlin")).using(project(":"))
-    }
-}
-```
-
-Then add the dependency to your `build.gradle.kts`:
+Add the dependency to your `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.alexstyl:simple-analytics-kotlin")
+    implementation("com.alexstyl:simple-analytics-kotlin:0.1.0")
 }
 ```
+
+The library is published on Maven Central, so make sure `mavenCentral()` is in your repositories.
 
 ## Quick start
 
