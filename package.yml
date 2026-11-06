@@ -1,3 +1,23 @@
 name: simple-analytics-kotlin
 description: Sends events and pageviews to Simple Analytics from Kotlin apps, without cookies or identifiers.
 version: 0.1.0
+
+publishing:
+  groupId: com.alexstyl
+  artifactId: simple-analytics-kotlin
+  url: https://github.com/alexstyl/simple-analytics-kotlin
+  licenses:
+    - name: MIT License
+      url: https://opensource.org/license/mit
+      distribution: repo
+  developers:
+    - id: alexstyl
+      name: Alex Styl
+      url: https://github.com/alexstyl
+  scm:
+    connection: scm:git:https://github.com/alexstyl/simple-analytics-kotlin.git
+    developerConnection: scm:git:ssh://git@github.com/alexstyl/simple-analytics-kotlin.git
+    url: https://github.com/alexstyl/simple-analytics-kotlin
+  issueManagement:
+    system: GitHub Issues
+    url: https://github.com/alexstyl/simple-analytics-kotlin/issues

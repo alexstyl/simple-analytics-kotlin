@@ -1,5 +1,5 @@
 plugins {
-    id("com.composables.kpm") version "0.5.1"
+    id("com.composables.kpm") version "0.6.0"
 
     kotlin("jvm") version "2.4.0"
 }
