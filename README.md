@@ -103,16 +103,6 @@ Events are sent in the background, so ones recorded right before your app exits 
 Runtime.getRuntime().addShutdownHook(Thread { analytics.close() })
 ```
 
-### Turn off analytics in development builds
-
-To keep test runs and debug builds out of your numbers, only create a `SimpleAnalytics` in release builds and call it with `?.`:
-
-```kotlin
-val analytics = if (isRelease) SimpleAnalytics("app.example.com", "MyApp", "1.0.0") else null
-
-analytics?.track("app_opened")
-```
-
 ### Leave out the visitor's country, language and screen
 
 To send none of the computer's settings, pass `device = null`:
