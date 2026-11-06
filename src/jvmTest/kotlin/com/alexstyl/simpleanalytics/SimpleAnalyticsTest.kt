@@ -3,8 +3,11 @@ package com.alexstyl.simpleanalytics
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.io.IOException
-import java.time.Duration
-import java.time.Instant
+import kotlinx.io.files.Path
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -23,9 +26,9 @@ class SimpleAnalyticsTest {
 
     /** Simple Analytics answering each post with [respond], recording what it accepted. */
     private fun analytics(directory: File? = null, maxQueued: Int = 1000, respond: (String) -> Int = { 200 }) =
-        SimpleAnalytics("app.example.com", "MyApp/1.0.0", device = null, queueDirectory = directory,
+        SimpleAnalytics("app.example.com", "MyApp/1.0.0", device = null, queueDirectory = directory?.let { Path(it.path) },
             post = { body -> threads += Thread.currentThread(); respond(body).also { if (it == 200) sent += body } },
-            clock = now::get, retryDelay = { Duration.ofMillis(5) }, maxQueued = maxQueued)
+            clock = now::get, retryDelay = { 5.milliseconds }, maxQueued = maxQueued)
 
     private fun names() = sent.map { Regex("\"(?:event|path)\":\"([^\"]+)\"").findAll(it).last().groupValues[1] }
 
@@ -71,7 +74,7 @@ class SimpleAnalyticsTest {
         val online = AtomicBoolean(false)
         val analytics = analytics { if (online.get()) 200 else throw IOException("offline") }
         analytics.track("first")
-        now.set(start.plusSeconds(60))
+        now.set(start + 60.seconds)
         analytics.track("second")
         Thread.sleep(50)
         assertTrue(sent.isEmpty())
@@ -110,7 +113,7 @@ class SimpleAnalyticsTest {
 
     @Test fun `events older than 72 hours are dropped`() {
         analytics(directory = root) { throw IOException("offline") }.apply { track("stale"); close() }
-        now.set(start + Duration.ofHours(73))
+        now.set(start + 73.hours)
         val analytics = analytics(directory = root)
         analytics.track("fresh")
         awaitSent(1)
@@ -147,7 +150,7 @@ class SimpleAnalyticsTest {
     }
 
     @Test fun `retries wait longer after each failure, up to 5 minutes`() {
-        assertEquals(listOf(1L, 2L, 4L, 8L, 256L, 300L, 300L), listOf(1, 2, 3, 4, 9, 10, 50).map { backoff(it).seconds })
+        assertEquals(listOf(1L, 2L, 4L, 8L, 256L, 300L, 300L), listOf(1, 2, 3, 4, 9, 10, 50).map { backoff(it).inWholeSeconds })
     }
 
     @Test fun `the default user agent names the app and the computer`() {

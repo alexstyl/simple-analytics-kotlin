@@ -8,6 +8,8 @@ kotlin {
     jvmToolchain(17)
     jvm()
 
+    compilerOptions { optIn.add("kotlin.concurrent.atomics.ExperimentalAtomicApi") }
+
     sourceSets {
         jvmTest.dependencies {
             implementation(kotlin("test"))

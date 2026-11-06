@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **Breaking:** Queue directory: pass `queueDirectory` as a `kotlinx.io.files.Path`, such as `Path(appDataDir, "analytics")`, instead of a `File`
 - Kotlin Multiplatform: add the library to the common code of Multiplatform projects that target the JVM
 
 ## [0.1.0] - 2026-11-06
