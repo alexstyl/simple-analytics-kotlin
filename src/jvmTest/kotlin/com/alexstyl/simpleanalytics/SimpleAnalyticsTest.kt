@@ -1,16 +1,17 @@
 package com.alexstyl.simpleanalytics
 
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.io.IOException
-import kotlinx.io.files.Path
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -26,11 +27,13 @@ class SimpleAnalyticsTest {
 
     /** Simple Analytics answering each post with [respond], recording what it accepted. */
     private fun analytics(directory: File? = null, maxQueued: Int = 1000, respond: (String) -> Int = { 200 }) =
-        SimpleAnalytics("app.example.com", "MyApp/1.0.0", device = null, queueDirectory = directory?.let { Path(it.path) },
+        SimpleAnalytics("app.example.com", "MyApp/1.0.0", device = null, queueStorage = directory?.let { queueFile(it, "app.example.com") },
             post = { body -> threads += Thread.currentThread(); respond(body).also { if (it == 200) sent += body } },
             clock = now::get, retryDelay = { 5.milliseconds }, maxQueued = maxQueued)
 
     private fun names() = sent.map { Regex("\"(?:event|path)\":\"([^\"]+)\"").findAll(it).last().groupValues[1] }
+
+    private fun SimpleAnalytics.flushNow() = runBlocking { withTimeout(5.seconds) { flush() } }
 
     private fun awaitSent(count: Int) {
         val deadline = System.nanoTime() + 5_000_000_000
@@ -104,6 +107,7 @@ class SimpleAnalyticsTest {
         val offline = analytics(directory = root) { throw IOException("offline") }
         offline.track("first")
         offline.pageview("/settings")
+        offline.flushNow()
         offline.close()
 
         analytics(directory = root)
@@ -112,7 +116,7 @@ class SimpleAnalyticsTest {
     }
 
     @Test fun `events older than 72 hours are dropped`() {
-        analytics(directory = root) { throw IOException("offline") }.apply { track("stale"); close() }
+        analytics(directory = root) { throw IOException("offline") }.apply { track("stale"); flushNow(); close() }
         now.set(start + 73.hours)
         val analytics = analytics(directory = root)
         analytics.track("fresh")
@@ -140,13 +144,30 @@ class SimpleAnalyticsTest {
         assertEquals(listOf("app_opened"), names())
     }
 
-    @Test fun `nothing is recorded after closing`() {
-        val analytics = analytics()
+    @Test fun `closing still sends what was recorded, and records nothing after`() {
+        val analytics = analytics { Thread.sleep(20); 200 }
         analytics.track("app_opened")
         analytics.close()
         analytics.track("after")
         analytics.pageview("/")
+        assertTrue(sent.isEmpty(), "close() doesn't wait for sending")
+        analytics.flushNow()
         assertEquals(listOf("app_opened"), names())
+    }
+
+    @Test fun `flush waits until recorded events are sent`() {
+        val analytics = analytics { Thread.sleep(20); 200 }
+        analytics.track("first")
+        analytics.pageview("/")
+        analytics.flushNow()
+        assertEquals(listOf("first", "/"), names())
+    }
+
+    @Test fun `flush doesn't wait for retries while offline`() {
+        val analytics = analytics { throw IOException("offline") }
+        analytics.track("app_opened")
+        analytics.flushNow()
+        assertTrue(sent.isEmpty())
     }
 
     @Test fun `retries wait longer after each failure, up to 5 minutes`() {

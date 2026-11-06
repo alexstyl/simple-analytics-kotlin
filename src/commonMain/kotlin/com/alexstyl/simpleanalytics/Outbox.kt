@@ -1,33 +1,26 @@
 package com.alexstyl.simpleanalytics
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.io.buffered
-import kotlinx.io.files.Path
-import kotlinx.io.files.SystemFileSystem
-import kotlinx.io.readString
-import kotlinx.io.writeString
 import kotlin.time.Duration
 import kotlin.time.Instant
 
 /**
  * Payloads waiting to be sent, oldest first. They're sent one at a time; a failure to reach Simple Analytics pauses the
  * queue until a retry after [retryDelay]. Holds at most [maxQueued] payloads, dropping the oldest, and drops payloads
- * older than [maxAge]. With a [file], the queue is saved after every change and loaded on creation.
+ * older than [maxAge]. With [storage], the queue is saved after every change and loaded on creation.
  *
  * All state is touched only by [worker], which runs [tasks] one at a time in order.
  */
 internal class Outbox(
-    private val file: Path?,
+    private val storage: QueueStorage?,
     private val post: suspend (String) -> Int,
     private val clock: () -> Instant,
     private val retryDelay: (attempt: Int) -> Duration,
@@ -36,7 +29,7 @@ internal class Outbox(
 ) {
     private class Payload(val at: Instant, val body: String)
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineName("SimpleAnalytics"))
+    private val scope = CoroutineScope(Dispatchers.Default + CoroutineName("SimpleAnalytics"))
     private val tasks = Channel<suspend () -> Unit>(Channel.UNLIMITED)
     private val queue = ArrayDeque<Payload>()
     private var retry: Job? = null
@@ -52,7 +45,7 @@ internal class Outbox(
                 logWarning("Simple Analytics queue failed", e)
             }
         }
-        // A pending retry shouldn't hold up closing; the payload stays queued.
+        // After closing, a pending retry shouldn't keep running; its payloads stay in storage.
         retry?.cancel()
     }
 
@@ -68,16 +61,18 @@ internal class Outbox(
         if (retry == null) sendQueued()
     }
 
-    /** Runs the tasks already added, waiting up to [timeout] for them. */
-    fun close(timeout: Duration) {
-        tasks.close()
-        runBlocking { withTimeoutOrNull(timeout) { worker.join() } }
-        scope.cancel()
+    /** Each task sends what it can before the next one runs, so once this one runs, earlier payloads are sent or waiting. */
+    suspend fun flush() {
+        val done = CompletableDeferred<Unit>()
+        if (onWorker { done.complete(Unit) }) done.await() else worker.join()
     }
 
-    private fun onWorker(task: suspend () -> Unit) {
-        tasks.trySend(task)
+    /** Runs the tasks already added, then stops. */
+    fun close() {
+        tasks.close()
     }
+
+    private fun onWorker(task: suspend () -> Unit): Boolean = tasks.trySend(task).isSuccess
 
     private suspend fun sendQueued() {
         while (true) {
@@ -113,9 +108,10 @@ internal class Outbox(
     }
 
     private fun load() {
-        val file = file?.takeIf { SystemFileSystem.metadataOrNull(it)?.isRegularFile == true } ?: return
-        val text = runCatching { SystemFileSystem.source(file).buffered().use { it.readString() } }.getOrNull() ?: return
-        text.lineSequence().forEach { line ->
+        val saved = runCatching { storage?.read() }
+            .onFailure { logWarning("Couldn't load the Simple Analytics queue", it) }
+            .getOrNull() ?: return
+        saved.lineSequence().forEach { line ->
             val (at, body) = line.split('\t', limit = 2).takeIf { it.size == 2 } ?: return@forEach
             val time = at.toLongOrNull()?.let(Instant::fromEpochMilliseconds) ?: return@forEach
             queue.addLast(Payload(time, body))
@@ -124,16 +120,9 @@ internal class Outbox(
     }
 
     private fun save() {
-        val file = file ?: return
-        runCatching {
-            val directory = file.parent
-            directory?.let { SystemFileSystem.createDirectories(it) }
-            val temp = if (directory != null) Path(directory, "${file.name}.tmp") else Path("${file.name}.tmp")
-            // JSON escapes tabs and newlines, so neither appears inside a body.
-            SystemFileSystem.sink(temp).buffered().use { sink ->
-                queue.forEach { sink.writeString("${it.at.toEpochMilliseconds()}\t${it.body}\n") }
-            }
-            SystemFileSystem.atomicMove(temp, file)
-        }.onFailure { logWarning("Couldn't save the Simple Analytics queue to $file", it) }
+        val storage = storage ?: return
+        // JSON escapes tabs and newlines, so neither appears inside a body.
+        runCatching { storage.write(queue.joinToString("") { "${it.at.toEpochMilliseconds()}\t${it.body}\n" }) }
+            .onFailure { logWarning("Couldn't save the Simple Analytics queue", it) }
     }
 }

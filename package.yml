@@ -25,7 +25,6 @@ dependencies:
     implementation:
       - io.ktor:ktor-client-core:3.6.1
       - org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0
-    api:
       - org.jetbrains.kotlinx:kotlinx-io-core:0.9.2
   jvm:
     - io.ktor:ktor-client-cio:3.6.1

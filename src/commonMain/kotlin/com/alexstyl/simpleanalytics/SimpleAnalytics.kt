@@ -7,7 +7,6 @@ import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.userAgent
-import kotlinx.io.files.Path
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.time.Clock
 import kotlin.time.Duration
@@ -17,29 +16,38 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
- * The computer's settings that Simple Analytics reports on. It works out the country from [timezone], an IANA id
+ * The device's settings that Simple Analytics reports on. It works out the country from [timezone], an IANA id
  * such as `Europe/Athens`. [language] is a language tag such as `en-US`.
  */
 data class DeviceInfo(val timezone: String, val language: String, val screenWidth: Int?, val screenHeight: Int?) {
     companion object {
-        /** This computer's timezone, language and, when it has a display, the size of its main screen. */
+        /** This device's timezone, language and, when it has a display, the size of its main screen. */
         fun current(): DeviceInfo = currentDevice()
     }
+}
+
+/**
+ * Keeps the events that haven't been sent yet, so they're sent on the app's next run. The queue is opaque text: [write]
+ * it as given and [read] it back unchanged, or null when nothing was written.
+ */
+interface QueueStorage {
+    fun read(): String?
+    fun write(queue: String)
 }
 
 /**
  * Sends events and pageviews to Simple Analytics for [hostname], a website added in its dashboard. They carry no cookies
  * or identifiers: only the event or path, its details, when it happened, the user agent and the [device]'s settings.
  *
- * Calls never block and never throw. Events are sent in order in the background. While the computer is offline
- * they wait and are retried with increasing delays, keeping the time they happened. With a queue directory they also
+ * Calls never block and never throw. Events are sent in order in the background. While the device is offline
+ * they wait and are retried with increasing delays, keeping the time they happened. With a [QueueStorage] they also
  * survive the app quitting. Invalid input and events Simple Analytics refuses are logged and dropped.
  */
 class SimpleAnalytics internal constructor(
     private val hostname: String,
     private val userAgent: String,
     private val device: DeviceInfo?,
-    queueDirectory: Path?,
+    queueStorage: QueueStorage?,
     /** Posts one JSON payload and returns the HTTP status; throws when it can't reach Simple Analytics. */
     post: suspend (String) -> Int,
     private val clock: () -> Instant = Clock.System::now,
@@ -48,23 +56,20 @@ class SimpleAnalytics internal constructor(
 ) : AutoCloseable {
 
     /**
-     * [appName] and [appVersion] make up the default [userAgent], such as `MyApp/1.0.0 (Mac OS X 15.1; aarch64)`.
-     * [device] defaults to this computer's settings; null sends none.
+     * [userAgent] tells Simple Analytics which app and system sent the events. [device] defaults to this device's
+     * settings; null sends none.
      *
-     * Events that can't be sent yet are kept in memory. Pass a [queueDirectory], such as your app's data folder, to
-     * keep them on disk instead, so they're sent on the app's next run. Use one instance per hostname and directory.
+     * Events that can't be sent yet are kept in memory. Pass a [queueStorage] to keep them between runs instead.
+     * Use one instance per hostname and storage.
      */
     constructor(
         hostname: String,
-        appName: String,
-        appVersion: String,
-        userAgent: String = defaultUserAgent(appName, appVersion),
+        userAgent: String,
         device: DeviceInfo? = DeviceInfo.current(),
-        queueDirectory: Path? = null,
-    ) : this(hostname, userAgent, device, queueDirectory, { body -> postEvent(userAgent, body) })
+        queueStorage: QueueStorage? = null,
+    ) : this(hostname, userAgent, device, queueStorage, { body -> postEvent(userAgent, body) })
 
-    private val outbox = Outbox(queueDirectory?.let { Path(it, "simple-analytics-$hostname.queue") },
-        post, clock, retryDelay, maxQueued, maxAge = MaxAge)
+    private val outbox = Outbox(queueStorage, post, clock, retryDelay, maxQueued, maxAge = MaxAge)
     private val firstPageview = AtomicBoolean(true)
     private val closed = AtomicBoolean(false)
 
@@ -95,11 +100,17 @@ class SimpleAnalytics internal constructor(
     }
 
     /**
-     * Stops recording and gives events already recorded up to [CloseTimeout] to be sent. Events still waiting stay in
-     * the queue directory for the next run.
+     * Waits until the events recorded so far are sent, or until Simple Analytics can't be reached and they're waiting
+     * for a retry. Use it with a timeout, such as before the app quits.
+     */
+    suspend fun flush() = outbox.flush()
+
+    /**
+     * Stops recording without waiting. Events already recorded are still sent in the background, unless Simple
+     * Analytics can't be reached; those stay in the [QueueStorage] for the next run.
      */
     override fun close() {
-        if (closed.compareAndSet(false, true)) outbox.close(CloseTimeout)
+        if (closed.compareAndSet(false, true)) outbox.close()
     }
 
     private fun now() = Instant.fromEpochMilliseconds(clock().toEpochMilliseconds())
@@ -109,7 +120,6 @@ class SimpleAnalytics internal constructor(
     private companion object {
         val EventName = Regex("[a-z0-9_]{1,200}")
         val RobotWords = listOf("bot", "spider", "crawl", "agent")
-        val CloseTimeout = 2.seconds
         const val MaxQueued = 1000
         val MaxAge = 72.hours
     }
@@ -117,8 +127,6 @@ class SimpleAnalytics internal constructor(
 
 /** Waits 1 second after the first failure, doubling up to 5 minutes. */
 internal fun backoff(attempt: Int): Duration = (1L shl (attempt - 1).coerceIn(0, 9)).seconds.coerceAtMost(5.minutes)
-
-internal fun defaultUserAgent(appName: String, appVersion: String): String = "$appName/$appVersion (${platformDescription()})"
 
 /** The JSON Simple Analytics' events API takes for one event that happened [at]. */
 internal fun eventJson(hostname: String, event: String, userAgent: String, device: DeviceInfo?, at: Instant, metadata: Map<String, String>): String = buildString {
