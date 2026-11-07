@@ -22,7 +22,7 @@ Add the dependency to your `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.alexstyl:simple-analytics-kotlin:0.1.0")
+    implementation("com.alexstyl:simple-analytics-kotlin:0.2.0")
 }
 ```
 

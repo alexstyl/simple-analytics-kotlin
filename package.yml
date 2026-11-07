@@ -1,6 +1,6 @@
 name: simple-analytics-kotlin
 description: Sends events and pageviews to Simple Analytics from Kotlin apps, without cookies or identifiers.
-version: 0.1.0
+version: 0.2.0
 publishing:
   groupId: com.alexstyl
   artifactId: simple-analytics-kotlin
