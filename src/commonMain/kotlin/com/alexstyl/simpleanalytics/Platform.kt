@@ -18,3 +18,9 @@ internal expect fun logDebug(message: String, error: Throwable? = null)
  * can't tell.
  */
 internal expect fun onAppQuit(send: suspend () -> Unit): AutoCloseable?
+
+/**
+ * `appName/appVersion` followed by the system the app runs on, in the form browsers write it, which Simple Analytics
+ * reads the operating system from, such as `MyApp/1.0.0 (Macintosh; Mac OS X 15_1; arm64)`.
+ */
+internal expect fun userAgent(appName: String, appVersion: String): String

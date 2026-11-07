@@ -44,199 +44,222 @@ interface QueueStorage {
 }
 
 /**
- * Sends events and pageviews to Simple Analytics for [hostname], a website added in its dashboard. They carry no cookies
- * or identifiers: only the event or path, its details, when it happened, the user agent and the [device]'s settings.
- *
- * Calls never block and never throw. Events are sent in order in the background. While the device is offline
- * they wait and are retried with increasing delays, keeping the time they happened. With a [QueueStorage] they also
- * survive the app quitting. Invalid input and events Simple Analytics refuses are logged and dropped.
- *
- * Like Simple Analytics' browser script, it measures how long each screen is on view: from its [pageview] until the
- * next one, counting only time while the app is on view: on desktop, the clock pauses while all its windows are
- * minimised or closed. The time is added to that pageview in
- * the dashboard's time on page. Pageviews sent more than a minute late, such as after being offline, keep the time they
- * happened instead and get no time on page.
+ * The settings for sending events and pageviews to Simple Analytics for a hostname, a website added in its dashboard.
+ * Creating them does nothing: [start] begins a session that records and sends. Events carry no cookies or identifiers:
+ * only the event or path, its details, when it happened, a user agent naming the app and the system it runs on, and
+ * the device's timezone, language and screen size.
  */
 class SimpleAnalytics internal constructor(
     private val hostname: String,
     private val userAgent: String,
-    private val device: DeviceInfo?,
-    queueStorage: QueueStorage?,
-    /** Sends one payload and returns the HTTP status; throws when it can't reach Simple Analytics. */
-    post: suspend (Delivery) -> Int,
+    private val queueStorage: QueueStorage? = null,
     private val pings: List<Duration> = emptyList(),
-    private val clock: () -> Instant = Clock.System::now,
-    retryDelay: (attempt: Int) -> Duration = ::backoff,
-    maxQueued: Int = MaxQueued,
-) : AutoCloseable {
+) {
+    /**
+     * Starts recording and sending. The session follows the app's windows, to pause time on page while they're all
+     * minimised, and stops by itself when the app quits. Each session's first pageview counts as a visit. Run one
+     * session at a time for each hostname and [queueStorage].
+     */
+    fun start(): Session = Session(hostname, userAgent, currentDevice(), queueStorage, { delivery -> deliver(userAgent, delivery) }, pings)
+        .also { it.watchApp() }
 
     /**
-     * [userAgent] tells Simple Analytics which app and system sent the events, in the form browsers use, such as
-     * `MyApp/1.0.0 (Macintosh; Mac OS X 15_1; arm64)`. Events also carry this device's timezone, language and screen
-     * size.
+     * A run of the app, recording and sending events and pageviews to Simple Analytics. Start one with [start].
      *
-     * Events that can't be sent yet are kept in memory. Pass a [queueStorage] to keep them between runs instead.
-     * Use one instance per hostname and storage.
+     * Calls never block and never throw. Events are sent in order in the background. While the device is offline
+     * they wait and are retried with increasing delays, keeping the time they happened. With a [QueueStorage] they also
+     * survive the app quitting. Invalid input and events Simple Analytics refuses are logged and dropped.
      *
-     * [pings] also send a screen's time on view as it passes each of them, such as 5 and 60 seconds, so its time on
-     * page is known even if the app is killed before it can report it.
+     * Like Simple Analytics' browser script, it measures how long each screen is on view, from its [pageview] until the
+     * next one, and adds it to that pageview as time on page. Only time while the app is on view counts: on desktop, the
+     * clock pauses while all its windows are minimised or closed. Pageviews sent more than a minute late, such as after
+     * being offline, keep the time they happened instead and get no time on page.
      */
-    constructor(
-        hostname: String,
-        userAgent: String,
-        queueStorage: QueueStorage? = null,
-        pings: List<Duration> = emptyList(),
-    ) : this(hostname, userAgent, currentDevice(), queueStorage, { delivery -> deliver(userAgent, delivery) }, pings) {
-        visibility = watchVisibility(::setVisible)
-        quitHook = onAppQuit { closeAndSend(QuitTimeout) }
-    }
+    class Session internal constructor(
+        private val hostname: String,
+        private val userAgent: String,
+        private val device: DeviceInfo?,
+        queueStorage: QueueStorage?,
+        /** Sends one payload and returns the HTTP status; throws when it can't reach Simple Analytics. */
+        post: suspend (Delivery) -> Int,
+        private val pings: List<Duration> = emptyList(),
+        private val clock: () -> Instant = Clock.System::now,
+        retryDelay: (attempt: Int) -> Duration = ::backoff,
+        maxQueued: Int = MaxQueued,
+    ) : AutoCloseable {
 
-    /** Follows whether the app is on view, where the platform can tell; closed with this instance. */
-    private var visibility: AutoCloseable? = null
+        /** Follows whether the app is on view, where the platform can tell; let go when the session stops. */
+        private var visibility: AutoCloseable? = null
 
-    /** Sends what's left when the app quits, where the platform can tell; removed when this instance is closed. */
-    private var quitHook: AutoCloseable? = null
+        /** Stops the session and sends what's left when the app quits, where the platform can tell; removed on [stop]. */
+        private var quitHook: AutoCloseable? = null
 
-    /** Pageviews sent as they happen, by id: only these can have time on page added. Touched only while sending. */
-    private val livePages = mutableSetOf<String>()
-    private val outbox = Outbox(queueStorage, { body, at -> route(body, at, post) }, clock, retryDelay, maxQueued, maxAge = MaxAge)
-    private val view = AtomicReference(View(pageId = null, visibleMillis = 0, visibleSince = null, visible = true))
-    private val timers = CoroutineScope(Dispatchers.Default + CoroutineName("SimpleAnalytics pings"))
-    private var pingJob: Job? = null
-    private val firstPageview = AtomicBoolean(true)
-    private val closed = AtomicBoolean(false)
-
-    init {
-        if (RobotWords.any { it in userAgent.lowercase() }) {
-            logWarning("Simple Analytics will count \"$userAgent\" as a robot and leave it out of the dashboard. " +
-                "Avoid the words ${RobotWords.joinToString()} in the user agent.")
+        /** Follows the app's windows and its quitting, so time on page pauses while it's hidden and nothing is left unsent. */
+        internal fun watchApp() {
+            visibility = watchVisibility(::setVisible)
+            quitHook = onAppQuit { stopAndSend(QuitTimeout) }
         }
-    }
 
-    /** Records [event], such as `buy_clicked`, with optional [metadata]. Names are lowercase letters, digits and underscores. */
-    fun track(event: String, metadata: Map<String, String> = emptyMap()) {
-        if (closed.load()) return
-        if (!EventName.matches(event)) return drop("Event names are lowercase letters, digits and underscores: \"$event\"")
-        val at = now()
-        outbox.add(at, eventJson(hostname, event, userAgent, device, at, metadata))
-    }
+        /** Pageviews sent as they happen, by id: only these can have time on page added. Touched only while sending. */
+        private val livePages = mutableSetOf<String>()
+        private val outbox = Outbox(queueStorage, { body, at -> route(body, at, post) }, clock, retryDelay, maxQueued, maxAge = MaxAge)
+        private val view = AtomicReference(View(pageId = null, visibleMillis = 0, visibleSince = null, visible = true))
+        private val timers = CoroutineScope(Dispatchers.Default + CoroutineName("SimpleAnalytics pings"))
+        private var pingJob: Job? = null
+        private val firstPageview = AtomicBoolean(true)
+        private val closed = AtomicBoolean(false)
 
-    /**
-     * Records that the screen at [path], such as `/settings`, was shown. The first pageview of each [SimpleAnalytics]
-     * counts as a visit, so the dashboard's visitors are the app's runs.
-     */
-    fun pageview(path: String) {
-        if (closed.load()) return
-        if (!path.startsWith("/")) return drop("Paths start with a slash: \"$path\"")
-        val at = now()
-        val id = randomId()
-        val before = view.fetchAndUpdate { it.copy(pageId = id, visibleMillis = 0, visibleSince = if (it.visible) at else null) }
-        before.pageId?.let { appendTime(it, before.visibleMillis(at)) }
-        outbox.add(at, pageviewJson(hostname, path, userAgent, device, at, unique = firstPageview.exchange(false), id = id))
-        schedulePings()
-    }
-
-    /**
-     * Whether the app is on view: `false` once its windows are minimised or it goes to the background, `true` when
-     * it's back. Only time on view counts towards time on page; hiding also sends the time so far.
-     */
-    internal fun setVisible(visible: Boolean) {
-        if (closed.load()) return
-        val at = now()
-        val before = view.fetchAndUpdate {
-            if (it.visible == visible) it
-            else it.copy(visible = visible, visibleMillis = it.visibleMillis(at), visibleSince = if (visible) at else null)
-        }
-        if (before.visible == visible) return
-        if (!visible) before.pageId?.let { appendTime(it, before.visibleMillis(at)) }
-        schedulePings()
-    }
-
-    /**
-     * Waits until the events recorded so far are sent, or until Simple Analytics can't be reached and they're waiting
-     * for a retry. Use it with a timeout, such as before the app quits.
-     */
-    suspend fun flush() = outbox.flush()
-
-    /**
-     * Stops recording without waiting. Events already recorded are still sent in the background, unless Simple
-     * Analytics can't be reached; those stay in the [QueueStorage] for the next run. There's usually no need to call
-     * it: when the app quits, what's left is sent for up to 2 seconds by itself.
-     */
-    override fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        runCatching { visibility?.close() }
-        runCatching { quitHook?.close() }
-        timers.cancel()
-        val current = view.load()
-        current.pageId?.let { appendTime(it, current.visibleMillis(now())) }
-        outbox.close()
-    }
-
-    /** Closes, then waits up to [timeout] for what's left, including the last screen's time on view, to be sent. */
-    internal suspend fun closeAndSend(timeout: Duration) {
-        close()
-        withTimeoutOrNull(timeout) { flush() }
-    }
-
-    /** Adds the time [pageId] has been on view to that pageview, when there's at least a second of it. */
-    private fun appendTime(pageId: String, visibleMillis: Long, ping: Boolean = false) {
-        val seconds = visibleMillis / 1000
-        if (seconds >= 1) outbox.add(now(), appendJson(hostname, pageId, seconds, ping))
-    }
-
-    /** Waits until the screen on view passes each of [pings] of time on view, sending its time at each. */
-    private fun schedulePings() {
-        if (pings.isEmpty()) return
-        val started = view.load()
-        val pageId = started.pageId ?: return
-        pingJob?.cancel()
-        if (!started.visible) return
-        pingJob = timers.launch {
-            for (threshold in pings.sorted()) {
-                val waited = started.visibleMillis(now())
-                val remaining = threshold.inWholeMilliseconds - waited
-                if (remaining <= 0) continue
-                delay(remaining)
-                val current = view.load()
-                if (current.pageId != pageId || !current.visible) return@launch
-                appendTime(pageId, maxOf(current.visibleMillis(now()), threshold.inWholeMilliseconds), ping = true)
+        init {
+            if (RobotWords.any { it in userAgent.lowercase() }) {
+                logWarning("Simple Analytics will count \"$userAgent\" as a robot and leave it out of the dashboard. " +
+                    "Avoid the words ${RobotWords.joinToString()} in the user agent.")
             }
         }
-    }
 
-    /**
-     * Sends a queued payload the way Simple Analytics' browser script would when it's fresh: a pageview within a minute
-     * of happening goes as a live pageview, so time on page can be added to it later. Older pageviews go to the events
-     * API with the time they happened. Time on page for a pageview that didn't go live has nowhere to go and is dropped.
-     */
-    private suspend fun route(body: String, at: Instant, post: suspend (Delivery) -> Int): Int = when {
-        body.startsWith(PageviewPrefix) -> {
-            val id = jsonFields(body)["id"]
-            if (id != null && clock() - at <= LiveWindow) post(Delivery(Delivery.Kind.Pageview, body)).also { if (it in 200..299) livePages += id }
-            else post(Delivery(Delivery.Kind.Event, body.replace(IdField, "")))
+        /** Records [event], such as `buy_clicked`, with optional [metadata]. Names are lowercase letters, digits and underscores. */
+        fun track(event: String, metadata: Map<String, String> = emptyMap()) {
+            if (closed.load()) return
+            if (!EventName.matches(event)) return drop("Event names are lowercase letters, digits and underscores: \"$event\"")
+            val at = now()
+            outbox.add(at, eventJson(hostname, event, userAgent, device, at, metadata))
         }
-        body.startsWith(AppendPrefix) ->
-            if (jsonFields(body)["original_id"] in livePages) post(Delivery(Delivery.Kind.Append, body)) else 200
-        else -> post(Delivery(Delivery.Kind.Event, body))
-    }
 
-    private fun now() = Instant.fromEpochMilliseconds(clock().toEpochMilliseconds())
+        /**
+         * Records that the screen at [path], such as `/settings`, was shown. The first pageview of each session counts as
+         * a visit, so the dashboard's visitors are the app's runs.
+         */
+        fun pageview(path: String) {
+            if (closed.load()) return
+            if (!path.startsWith("/")) return drop("Paths start with a slash: \"$path\"")
+            val at = now()
+            val id = randomId()
+            val before = view.fetchAndUpdate { it.copy(pageId = id, visibleMillis = 0, visibleSince = if (it.visible) at else null) }
+            before.pageId?.let { appendTime(it, before.visibleMillis(at)) }
+            outbox.add(at, pageviewJson(hostname, path, userAgent, device, at, unique = firstPageview.exchange(false), id = id))
+            schedulePings()
+        }
 
-    private fun drop(reason: String) = logWarning("Not sent to Simple Analytics. $reason")
+        /**
+         * Whether the app is on view: `false` once its windows are minimised or it goes to the background, `true` when
+         * it's back. Only time on view counts towards time on page; hiding also sends the time so far.
+         */
+        internal fun setVisible(visible: Boolean) {
+            if (closed.load()) return
+            val at = now()
+            val before = view.fetchAndUpdate {
+                if (it.visible == visible) it
+                else it.copy(visible = visible, visibleMillis = it.visibleMillis(at), visibleSince = if (visible) at else null)
+            }
+            if (before.visible == visible) return
+            if (!visible) before.pageId?.let { appendTime(it, before.visibleMillis(at)) }
+            schedulePings()
+        }
 
-    private companion object {
-        val EventName = Regex("[a-z0-9_]{1,200}")
-        val RobotWords = listOf("bot", "spider", "crawl", "agent")
-        const val MaxQueued = 1000
-        val MaxAge = 72.hours
-        val LiveWindow = 1.minutes
-        val QuitTimeout = 2.seconds
-        const val PageviewPrefix = "{\"type\":\"pageview\""
-        const val AppendPrefix = "{\"type\":\"append\""
-        val IdField = Regex(",\"id\":\"[^\"]*\"")
+        /**
+         * Waits until the events recorded so far are sent, or until Simple Analytics can't be reached and they're waiting
+         * for a retry. Use it with a timeout.
+         */
+        suspend fun flush() = outbox.flush()
+
+        /**
+         * Ends the session without waiting: it records nothing more, adds the time the screen on view has had, and lets
+         * what's already recorded be sent in the background. What can't be sent stays in the [QueueStorage] for the next
+         * run. There's usually no need to call it: when the app quits, the session stops and what's left is sent for up
+         * to 2 seconds by itself. Stopping a stopped session does nothing.
+         */
+        fun stop() {
+            if (!closed.compareAndSet(false, true)) return
+            runCatching { visibility?.close() }
+            runCatching { quitHook?.close() }
+            timers.cancel()
+            val current = view.load()
+            current.pageId?.let { appendTime(it, current.visibleMillis(now())) }
+            outbox.close()
+        }
+
+        /** The same as [stop], so a session works with `use { }`. */
+        override fun close() = stop()
+
+        /** Stops, then waits up to [timeout] for what's left, including the last screen's time on view, to be sent. */
+        internal suspend fun stopAndSend(timeout: Duration) {
+            stop()
+            withTimeoutOrNull(timeout) { flush() }
+        }
+
+        /** Adds the time [pageId] has been on view to that pageview, when there's at least a second of it. */
+        private fun appendTime(pageId: String, visibleMillis: Long, ping: Boolean = false) {
+            val seconds = visibleMillis / 1000
+            if (seconds >= 1) outbox.add(now(), appendJson(hostname, pageId, seconds, ping))
+        }
+
+        /** Waits until the screen on view passes each of [pings] of time on view, sending its time at each. */
+        private fun schedulePings() {
+            if (pings.isEmpty()) return
+            val started = view.load()
+            val pageId = started.pageId ?: return
+            pingJob?.cancel()
+            if (!started.visible) return
+            pingJob = timers.launch {
+                for (threshold in pings.sorted()) {
+                    val waited = started.visibleMillis(now())
+                    val remaining = threshold.inWholeMilliseconds - waited
+                    if (remaining <= 0) continue
+                    delay(remaining)
+                    val current = view.load()
+                    if (current.pageId != pageId || !current.visible) return@launch
+                    appendTime(pageId, maxOf(current.visibleMillis(now()), threshold.inWholeMilliseconds), ping = true)
+                }
+            }
+        }
+
+        /**
+         * Sends a queued payload the way Simple Analytics' browser script would when it's fresh: a pageview within a minute
+         * of happening goes as a live pageview, so time on page can be added to it later. Older pageviews go to the events
+         * API with the time they happened. Time on page for a pageview that didn't go live has nowhere to go and is dropped.
+         */
+        private suspend fun route(body: String, at: Instant, post: suspend (Delivery) -> Int): Int = when {
+            body.startsWith(PageviewPrefix) -> {
+                val id = jsonFields(body)["id"]
+                if (id != null && clock() - at <= LiveWindow) post(Delivery(Delivery.Kind.Pageview, body)).also { if (it in 200..299) livePages += id }
+                else post(Delivery(Delivery.Kind.Event, body.replace(IdField, "")))
+            }
+            body.startsWith(AppendPrefix) ->
+                if (jsonFields(body)["original_id"] in livePages) post(Delivery(Delivery.Kind.Append, body)) else 200
+            else -> post(Delivery(Delivery.Kind.Event, body))
+        }
+
+        private fun now() = Instant.fromEpochMilliseconds(clock().toEpochMilliseconds())
+
+        private fun drop(reason: String) = logWarning("Not sent to Simple Analytics. $reason")
+
+        private companion object {
+            val EventName = Regex("[a-z0-9_]{1,200}")
+            val RobotWords = listOf("bot", "spider", "crawl", "agent")
+            const val MaxQueued = 1000
+            val MaxAge = 72.hours
+            val LiveWindow = 1.minutes
+            val QuitTimeout = 2.seconds
+            const val PageviewPrefix = "{\"type\":\"pageview\""
+            const val AppendPrefix = "{\"type\":\"append\""
+            val IdField = Regex(",\"id\":\"[^\"]*\"")
+        }
     }
 }
+
+/**
+ * The settings for sending events and pageviews to Simple Analytics for [hostname], such as `app.example.com`. Events
+ * carry a user agent built from [appName], [appVersion] and the system the app runs on, so the dashboard shows the app
+ * and its operating system. Events that can't be sent yet are kept in memory; pass a [queueStorage] to keep them
+ * between runs instead. [pings] also send a screen's time on view as it passes each of them, such as 5 and 60 seconds,
+ * so its time on page is known even if the app is killed before it can report it.
+ */
+fun SimpleAnalytics(
+    hostname: String,
+    appName: String,
+    appVersion: String,
+    queueStorage: QueueStorage? = null,
+    pings: List<Duration> = emptyList(),
+): SimpleAnalytics = SimpleAnalytics(hostname, userAgent(appName, appVersion), queueStorage, pings)
 
 /** Waits 1 second after the first failure, doubling up to 5 minutes. */
 internal fun backoff(attempt: Int): Duration = (1L shl (attempt - 1).coerceIn(0, 9)).seconds.coerceAtMost(5.minutes)

@@ -32,7 +32,7 @@ class SimpleAnalyticsTest {
     /** Simple Analytics answering each post with [respond], recording what it accepted. */
     private fun analytics(directory: File? = null, maxQueued: Int = 1000, pings: List<Duration> = emptyList(),
                           respond: (String) -> Int = { 200 }) =
-        SimpleAnalytics("app.example.com", "MyApp/1.0.0", device = null, queueStorage = directory?.let { queueFile(it, "app.example.com") },
+        SimpleAnalytics.Session("app.example.com", "MyApp/1.0.0", device = null, queueStorage = directory?.let { queueFile(it, "app.example.com") },
             post = { delivery ->
                 threads += Thread.currentThread()
                 respond(delivery.body).also { if (it == 200) { sent += delivery.body; deliveries += delivery } }
@@ -45,7 +45,7 @@ class SimpleAnalyticsTest {
     private fun names() = sent.filterNot { it.startsWith("{\"type\":\"append\"") }
         .map { Regex("\"(?:event|path)\":\"([^\"]+)\"").findAll(it).last().groupValues[1] }
 
-    private fun SimpleAnalytics.flushNow() = runBlocking { withTimeout(5.seconds) { flush() } }
+    private fun SimpleAnalytics.Session.flushNow() = runBlocking { withTimeout(5.seconds) { flush() } }
 
     private fun awaitSent(count: Int) {
         val deadline = System.nanoTime() + 5_000_000_000
@@ -270,9 +270,18 @@ class SimpleAnalyticsTest {
         analytics.flushNow()
         now.set(start + 30.seconds)
         analytics.track("export_clicked")
-        runBlocking { analytics.closeAndSend(5.seconds) }
+        runBlocking { analytics.stopAndSend(5.seconds) }
 
         assertEquals(listOf("/", "export_clicked"), names())
         assertEquals(listOf("30"), appends().map { it.getValue("duration") })
+    }
+
+    @Test fun `settings do nothing until started, and a stopped session records nothing`() {
+        val settings = SimpleAnalytics("app.example.com", "MyApp/1.0.0")
+        val session = settings.start()
+        session.stop()
+        session.stop()
+        session.track("after")
+        settings.start().use { }
     }
 }

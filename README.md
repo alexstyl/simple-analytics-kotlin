@@ -30,13 +30,15 @@ The library is published on Maven Central, so make sure `mavenCentral()` is in y
 
 ## Quick start
 
-First add your app as a website in the Simple Analytics dashboard, using a hostname such as `app.example.com`. Then send your first event by creating a `SimpleAnalytics` with that hostname and your app's name and version, and calling `track()`:
+First add your app as a website in the Simple Analytics dashboard, using a hostname such as `app.example.com`. Then send your first event by starting a session with that hostname and your app's name and version, and calling `track()`:
 
 ```kotlin
-val analytics = SimpleAnalytics(hostname = "app.example.com", appName = "MyApp", appVersion = "1.0.0")
+val analytics = SimpleAnalytics(hostname = "app.example.com", appName = "MyApp", appVersion = "1.0.0").start()
 
 analytics.track("app_opened")
 ```
+
+`SimpleAnalytics()` only holds your settings. Recording and sending begin with `start()`, and end with `stop()` or when your app quits.
 
 `app_opened` shows up in the dashboard's events report for `app.example.com`, along with the visitor's country, language, operating system and screen size.
 
@@ -78,29 +80,41 @@ Only time while your app is on view counts: on desktop the clock pauses by itsel
 An app that's force-quit or crashes can't report how long its last screen was on view. To keep a lower bound, pass `pings`, and the time on view is also sent as it passes each of them:
 
 ```kotlin
-val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", pings = listOf(5.seconds, 60.seconds))
+val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", pings = listOf(5.seconds, 60.seconds)).start()
 ```
 
 ### Count visitors
 
-The dashboard counts a visitor for the first pageview each `SimpleAnalytics` sends, so create one when your app starts and use it for the whole run. Its visitors are then your app's runs:
+The dashboard counts a visitor for the first pageview of each session, so start one when your app starts and use it for the whole run. Its visitors are then your app's runs:
 
 ```kotlin
-val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0")
+val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0").start()
 
-analytics.pageview("/")        // a visitor
+analytics.pageview("/")         // a visitor
 analytics.pageview("/settings") // not a new visitor
 ```
+
+### Stop sending
+
+To stop recording before your app quits, such as when someone turns analytics off in your settings, call `stop()`. Events already recorded are still sent, and the current screen's time on view is added:
+
+```kotlin
+analytics.stop()
+```
+
+To send again, call `start()` on your settings for a new session, which counts as a new visit.
 
 ### Keep events recorded offline
 
 When the computer is offline, events wait and are retried with increasing delays, up to every 5 minutes. They keep the time they happened, so they land on the right day in the dashboard. By default they wait in memory and are lost if the app quits first. To keep them until the next run, pass a `queueDirectory`, such as your app's data folder:
 
 ```kotlin
-val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", queueDirectory = File(appDataDir, "analytics"))
+val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", queueDirectory = File(appDataDir, "analytics")).start()
 ```
 
-Up to 1000 events wait at a time, and events older than 72 hours are dropped. Use one `SimpleAnalytics` per hostname and directory.
+To keep them somewhere else, such as your app's database, pass your own `QueueStorage` as `queueStorage` instead.
+
+Up to 1000 events wait at a time, and events older than 72 hours are dropped. Run one session at a time for each hostname and directory.
 
 Pageviews sent more than a minute after they happened, such as after being offline, keep the time they happened but get no time on page.
 

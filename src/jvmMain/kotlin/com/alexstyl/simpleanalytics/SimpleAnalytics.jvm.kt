@@ -5,25 +5,16 @@ import java.io.File
 import kotlin.time.Duration
 
 /**
- * Sends events and pageviews to Simple Analytics for [hostname] from a desktop or server app. They carry a user agent
- * built from [appName], [appVersion] and this computer, in the form browsers use, such as
- * `MyApp/1.0.0 (Macintosh; Mac OS X 15_1; arm64)`, so the dashboard shows your app as the browser and the system it ran
- * on, along with this computer's timezone, language and screen size.
- *
- * Time on page counts only while one of the app's windows is on view. [pings] send a screen's time on view as it
- * passes each of them, such as 5 and 60 seconds.
- *
- * Events that can't be sent yet are kept in memory. Pass a [queueDirectory], such as your app's data folder, to keep
- * them on disk instead, so they're sent on the app's next run. Use one instance per hostname and directory.
+ * The same settings as the other `SimpleAnalytics()`, keeping events that can't be sent yet in [queueDirectory], such
+ * as your app's data folder, so they're sent on the app's next run.
  */
 fun SimpleAnalytics(
     hostname: String,
     appName: String,
     appVersion: String,
-    queueDirectory: File? = null,
+    queueDirectory: File,
     pings: List<Duration> = emptyList(),
-): SimpleAnalytics =
-    SimpleAnalytics(hostname, userAgent(appName, appVersion), queueDirectory?.let { queueFile(it, hostname) }, pings)
+): SimpleAnalytics = SimpleAnalytics(hostname, appName, appVersion, queueFile(queueDirectory, hostname), pings)
 
 internal fun queueFile(directory: File, hostname: String) = FileQueueStorage(Path(File(directory, "simple-analytics-$hostname.queue").path))
 
@@ -31,10 +22,12 @@ internal fun queueFile(directory: File, hostname: String) = FileQueueStorage(Pat
  * `appName/appVersion` followed by this computer's system in the form browsers write it, which Simple Analytics reads
  * the operating system from: `(Macintosh; Mac OS X 15_1; arm64)`, `(Windows NT 10.0; Win64; x64)` or `(X11; Linux x86_64)`.
  */
+internal actual fun userAgent(appName: String, appVersion: String): String = userAgent(appName, appVersion, System.getProperty("os.name"))
+
 internal fun userAgent(
     appName: String,
     appVersion: String,
-    osName: String = System.getProperty("os.name"),
+    osName: String,
     osVersion: String = System.getProperty("os.version"),
     osArch: String = System.getProperty("os.arch"),
 ): String {
