@@ -56,7 +56,8 @@ class SimpleAnalytics internal constructor(
 ) : AutoCloseable {
 
     /**
-     * [userAgent] tells Simple Analytics which app and system sent the events. [device] defaults to this device's
+     * [userAgent] tells Simple Analytics which app and system sent the events, in the form browsers use, such as
+     * `MyApp/1.0.0 (Macintosh; Mac OS X 15_1; arm64)`. [device] defaults to this device's
      * settings; null sends none.
      *
      * Events that can't be sent yet are kept in memory. Pass a [queueStorage] to keep them between runs instead.
@@ -133,6 +134,7 @@ internal fun eventJson(hostname: String, event: String, userAgent: String, devic
     append("{\"type\":\"event\",\"hostname\":").append(json(hostname))
     append(",\"event\":").append(json(event))
     append(",\"ua\":").append(json(userAgent))
+    append(",\"https\":true")
     append(",\"timestamp\":").append(json(at.toString()))
     appendDevice(device)
     if (metadata.isNotEmpty()) {
@@ -148,6 +150,7 @@ internal fun pageviewJson(hostname: String, path: String, userAgent: String, dev
     append("{\"type\":\"pageview\",\"hostname\":").append(json(hostname))
     append(",\"event\":\"pageview\",\"path\":").append(json(path))
     append(",\"ua\":").append(json(userAgent))
+    append(",\"https\":true")
     append(",\"timestamp\":").append(json(at.toString()))
     append(",\"unique\":").append(unique)
     appendDevice(device)

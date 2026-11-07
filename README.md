@@ -12,7 +12,8 @@ Send events and pageviews from your Kotlin app to [Simple Analytics](https://sim
 - **Accurate visitor counts:** each run of your app counts as one visit, not every screen it shows.
 - **Works offline:** events recorded without a connection wait and are sent once it's back, landing on the day they happened. They can even survive the app quitting.
 - **Never slows down or crashes your app:** events are sent on a background thread. Invalid names, failed requests and network errors are logged and dropped, never thrown.
-- **No dependencies:** uses only the JDK.
+- **Shows your app like a browser:** the dashboard lists your app by name, next to Chrome and Safari, with the operating system it ran on.
+- **Kotlin Multiplatform:** add it to the common code of projects that target the JVM. It uses Ktor and kotlinx libraries.
 
 ## Installation
 
@@ -36,7 +37,7 @@ val analytics = SimpleAnalytics(hostname = "app.example.com", appName = "MyApp",
 analytics.track("app_opened")
 ```
 
-`app_opened` shows up in the dashboard's events report for `app.example.com`, along with the visitor's country, language, operating system and screen size.
+`app_opened` shows up in the dashboard's events report for `app.example.com`, along with the visitor's country, language, operating system and screen size. The browser column shows `MyApp`.
 
 ## Examples
 
@@ -83,10 +84,13 @@ Up to 1000 events wait at a time, and events older than 72 hours are dropped. Us
 
 ### Send events right before the app quits
 
-Events are sent in the background, so ones recorded right before your app exits can be lost. Call `close()` when your app quits. It gives them up to 2 seconds to be sent; with a `queueDirectory`, any still waiting are sent on the next run:
+Events are sent in the background, so ones recorded right before your app exits can be lost. Wait for them with `flush()` when your app quits, with a timeout so a missing connection can't hold the app up, then `close()`. With a `queueDirectory`, any still waiting are sent on the next run:
 
 ```kotlin
-Runtime.getRuntime().addShutdownHook(Thread { analytics.close() })
+Runtime.getRuntime().addShutdownHook(Thread {
+    runBlocking { withTimeoutOrNull(2.seconds) { analytics.flush() } }
+    analytics.close()
+})
 ```
 
 ### Leave out the visitor's country, language and screen
@@ -99,13 +103,17 @@ val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", device = nu
 
 You can also pass your own `DeviceInfo`, for example with the size of the screen your window is on.
 
-### Use your own user agent
+### See which version and system people use
 
-The user agent defaults to your app's name and version plus the operating system and processor, such as `MyApp/1.0.0 (Mac OS X 15.1; aarch64)`. Simple Analytics shows the operating system from it. To send a different one, pass `userAgent`:
+Every event and pageview carries a user agent made from your app's name and version and the computer it runs on, written the way browsers write theirs:
 
-```kotlin
-val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", userAgent = "MyApp/1.0.0 (+https://example.com)")
 ```
+MyApp/1.0.0 (Macintosh; Mac OS X 15_4; arm64)
+MyApp/1.0.0 (Windows NT 10.0; Win64; x64)
+MyApp/1.0.0 (X11; Linux x86_64)
+```
+
+Simple Analytics reads it like a browser's: the dashboard shows `MyApp` as the browser and macOS, Windows or Linux as the operating system. Pass the version people see, such as `1.4.0`, as `appVersion`.
 
 ## Troubleshooting
 
@@ -115,7 +123,7 @@ Check that `hostname` exactly matches a website you added in Simple Analytics, s
 
 ### "Simple Analytics will count … as a robot"
 
-Simple Analytics leaves out traffic from user agents containing `bot`, `spider`, `crawl` or `agent`. Choose an app name or user agent without those words, such as `MyApp` instead of `MyApp Agent`.
+Simple Analytics leaves out traffic from user agents containing `bot`, `spider`, `crawl` or `agent`. Choose an app name without those words, such as `MyApp` instead of `MyApp Agent`.
 
 ### "Not sent to Simple Analytics"
 

@@ -42,19 +42,19 @@ class SimpleAnalyticsTest {
     }
 
     @Test fun `an event is the hostname, its name, the user agent, when it happened and its details`() {
-        assertEquals("""{"type":"event","hostname":"app.example.com","event":"buy_clicked","ua":"MyApp/1.0.0","timestamp":"2026-11-06T10:00:00.123Z","metadata":{"source":"toolbar"}}""",
+        assertEquals("""{"type":"event","hostname":"app.example.com","event":"buy_clicked","ua":"MyApp/1.0.0","https":true,"timestamp":"2026-11-06T10:00:00.123Z","metadata":{"source":"toolbar"}}""",
             eventJson("app.example.com", "buy_clicked", "MyApp/1.0.0", null, Instant.parse("2026-11-06T10:00:00.123Z"), mapOf("source" to "toolbar")))
-        assertEquals("""{"type":"event","hostname":"h","event":"e","ua":"ua","timestamp":"2026-11-06T10:00:00Z","metadata":{"path":"C:\\Users\\\"me\"\u000a"}}""",
+        assertEquals("""{"type":"event","hostname":"h","event":"e","ua":"ua","https":true,"timestamp":"2026-11-06T10:00:00Z","metadata":{"path":"C:\\Users\\\"me\"\u000a"}}""",
             eventJson("h", "e", "ua", null, start, mapOf("path" to "C:\\Users\\\"me\"\n")))
     }
 
     @Test fun `events and pageviews carry the device's timezone, language and screen`() {
         val device = DeviceInfo("Europe/Athens", "en-GB", 1512, 982)
-        assertEquals("""{"type":"event","hostname":"h","event":"app_opened","ua":"ua","timestamp":"2026-11-06T10:00:00Z","timezone":"Europe/Athens","language":"en-GB","screen_width":1512,"screen_height":982}""",
+        assertEquals("""{"type":"event","hostname":"h","event":"app_opened","ua":"ua","https":true,"timestamp":"2026-11-06T10:00:00Z","timezone":"Europe/Athens","language":"en-GB","screen_width":1512,"screen_height":982}""",
             eventJson("h", "app_opened", "ua", device, start, emptyMap()))
-        assertEquals("""{"type":"pageview","hostname":"h","event":"pageview","path":"/settings","ua":"ua","timestamp":"2026-11-06T10:00:00Z","unique":true,"timezone":"Europe/Athens","language":"en-GB","screen_width":1512,"screen_height":982}""",
+        assertEquals("""{"type":"pageview","hostname":"h","event":"pageview","path":"/settings","ua":"ua","https":true,"timestamp":"2026-11-06T10:00:00Z","unique":true,"timezone":"Europe/Athens","language":"en-GB","screen_width":1512,"screen_height":982}""",
             pageviewJson("h", "/settings", "ua", device, start, unique = true))
-        assertEquals("""{"type":"pageview","hostname":"h","event":"pageview","path":"/","ua":"ua","timestamp":"2026-11-06T10:00:00Z","unique":false,"timezone":"UTC","language":"und"}""",
+        assertEquals("""{"type":"pageview","hostname":"h","event":"pageview","path":"/","ua":"ua","https":true,"timestamp":"2026-11-06T10:00:00Z","unique":false,"timezone":"UTC","language":"und"}""",
             pageviewJson("h", "/", "ua", DeviceInfo("UTC", "und", null, null), start, unique = false))
     }
 
@@ -174,9 +174,11 @@ class SimpleAnalyticsTest {
         assertEquals(listOf(1L, 2L, 4L, 8L, 256L, 300L, 300L), listOf(1, 2, 3, 4, 9, 10, 50).map { backoff(it).inWholeSeconds })
     }
 
-    @Test fun `the default user agent names the app and the computer`() {
-        val ua = defaultUserAgent("MyApp", "1.0.0")
-        assertTrue(ua.startsWith("MyApp/1.0.0 (${System.getProperty("os.name")} "), ua)
-        assertTrue(ua.endsWith("; ${System.getProperty("os.arch")})"), ua)
+    @Test fun `the user agent names the app and the computer the way browsers do`() {
+        assertEquals("MyApp/1.0.0 (Macintosh; Mac OS X 15_4; arm64)", userAgent("MyApp", "1.0.0", "Mac OS X", "15.4", "aarch64"))
+        assertEquals("MyApp/1.0.0 (Windows NT 10.0; Win64; x64)", userAgent("MyApp", "1.0.0", "Windows 11", "10.0", "amd64"))
+        assertEquals("MyApp/1.0.0 (Windows NT 10.0; ARM64)", userAgent("MyApp", "1.0.0", "Windows 10", "10.0", "aarch64"))
+        assertEquals("MyApp/1.0.0 (X11; Linux x86_64)", userAgent("MyApp", "1.0.0", "Linux", "6.8.0", "amd64"))
+        assertEquals("MyApp/1.0.0 (FreeBSD 14.1; x86_64)", userAgent("MyApp", "1.0.0", "FreeBSD", "14.1", "amd64"))
     }
 }

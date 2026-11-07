@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **Breaking:** User agent: the dashboard now shows your app as the browser and the operating system it ran on. The user agent is always built from `appName`, `appVersion` and the computer, and `userAgent` can no longer be passed
 - **Breaking:** Closing: `close()` no longer waits for events to be sent. Call `flush()` to wait for them, such as before the app quits
 - Queue storage: keep unsent events anywhere, such as in your app's database, by passing your own `QueueStorage`
 - Kotlin Multiplatform: add the library to the common code of Multiplatform projects that target the JVM
