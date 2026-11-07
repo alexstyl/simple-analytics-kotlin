@@ -8,8 +8,10 @@ import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlin.test.Test
@@ -23,15 +25,24 @@ class SimpleAnalyticsTest {
     private val start = Instant.parse("2026-11-06T10:00:00Z")
     private val now = AtomicReference(start)
     private val sent = CopyOnWriteArrayList<String>()
+    private val deliveries = CopyOnWriteArrayList<Delivery>()
     private val threads = CopyOnWriteArrayList<Thread>()
 
     /** Simple Analytics answering each post with [respond], recording what it accepted. */
-    private fun analytics(directory: File? = null, maxQueued: Int = 1000, respond: (String) -> Int = { 200 }) =
+    private fun analytics(directory: File? = null, maxQueued: Int = 1000, pings: List<Duration> = emptyList(),
+                          respond: (String) -> Int = { 200 }) =
         SimpleAnalytics("app.example.com", "MyApp/1.0.0", device = null, queueStorage = directory?.let { queueFile(it, "app.example.com") },
-            post = { body -> threads += Thread.currentThread(); respond(body).also { if (it == 200) sent += body } },
-            clock = now::get, retryDelay = { 5.milliseconds }, maxQueued = maxQueued)
+            post = { delivery ->
+                threads += Thread.currentThread()
+                respond(delivery.body).also { if (it == 200) { sent += delivery.body; deliveries += delivery } }
+            },
+            pings = pings, clock = now::get, retryDelay = { 5.milliseconds }, maxQueued = maxQueued)
 
-    private fun names() = sent.map { Regex("\"(?:event|path)\":\"([^\"]+)\"").findAll(it).last().groupValues[1] }
+    private fun appends() = deliveries.filter { it.kind == Delivery.Kind.Append }.map { jsonFields(it.body) }
+    private fun pageIds() = deliveries.filter { it.kind == Delivery.Kind.Pageview }.map { jsonFields(it.body).getValue("id") }
+
+    private fun names() = sent.filterNot { it.startsWith("{\"type\":\"append\"") }
+        .map { Regex("\"(?:event|path)\":\"([^\"]+)\"").findAll(it).last().groupValues[1] }
 
     private fun SimpleAnalytics.flushNow() = runBlocking { withTimeout(5.seconds) { flush() } }
 
@@ -180,5 +191,67 @@ class SimpleAnalyticsTest {
         assertEquals("MyApp/1.0.0 (Windows NT 10.0; ARM64)", userAgent("MyApp", "1.0.0", "Windows 10", "10.0", "aarch64"))
         assertEquals("MyApp/1.0.0 (X11; Linux x86_64)", userAgent("MyApp", "1.0.0", "Linux", "6.8.0", "amd64"))
         assertEquals("MyApp/1.0.0 (FreeBSD 14.1; x86_64)", userAgent("MyApp", "1.0.0", "FreeBSD", "14.1", "amd64"))
+    }
+
+    @Test fun `a pageview carries its id, and time on page is added to that id`() {
+        assertEquals("""{"type":"pageview","hostname":"h","event":"pageview","path":"/","ua":"ua","https":true,"timestamp":"2026-11-06T10:00:00Z","unique":true,"id":"a1"}""",
+            pageviewJson("h", "/", "ua", null, start, unique = true, id = "a1"))
+        assertEquals("""{"type":"append","hostname":"h","original_id":"a1","duration":42,"ping":true,"version":"cdn_latest_12"}""",
+            appendJson("h", "a1", 42, ping = true))
+    }
+
+    @Test fun `a screen's time on view is added to its pageview when the next screen shows`() {
+        val analytics = analytics()
+        analytics.pageview("/")
+        now.set(start + 42.seconds)
+        analytics.pageview("/settings")
+        analytics.flushNow()
+
+        val first = pageIds().first()
+        assertEquals(listOf(mapOf("type" to "append", "hostname" to "app.example.com", "original_id" to first, "duration" to "42",
+            "version" to ScriptVersion)), appends())
+    }
+
+    @Test fun `only time while the app is visible counts, and hiding it sends the time so far`() {
+        val analytics = analytics()
+        analytics.pageview("/")
+        analytics.flushNow()
+        now.set(start + 10.seconds)
+        analytics.setVisible(false)
+        now.set(start + 110.seconds)
+        analytics.setVisible(true)
+        now.set(start + 115.seconds)
+        analytics.close()
+        analytics.flushNow()
+
+        assertEquals(listOf("10", "15"), appends().map { it.getValue("duration") })
+    }
+
+    @Test fun `fresh pageviews go live with their id, late ones keep their time and get no time on page`() {
+        val online = AtomicBoolean(false)
+        val analytics = analytics { if (online.get()) 200 else throw IOException("offline") }
+        analytics.pageview("/")
+        now.set(start + 2.minutes)
+        analytics.pageview("/settings")
+        online.set(true)
+        analytics.flushNow()
+        awaitSent(2)
+
+        assertEquals(listOf(Delivery.Kind.Event, Delivery.Kind.Pageview), deliveries.map { it.kind })
+        assertTrue("\"id\"" !in deliveries[0].body && "2026-11-06T10:00:00Z" in deliveries[0].body)
+        assertTrue(appends().isEmpty(), "the 2 minutes on / belong to a pageview that didn't go live")
+    }
+
+    @Test fun `pings send the time on view as it passes each threshold`() {
+        val analytics = analytics(pings = listOf(1.seconds))
+        analytics.pageview("/")
+        awaitSent(2)
+        assertEquals(listOf("1"), appends().map { it.getValue("duration") })
+        assertEquals("true", appends().single()["ping"])
+    }
+
+    @Test fun `payload fields are read back with escapes undone`() {
+        assertEquals(mapOf("type" to "event", "path" to "C:\\Users\\\"me\"\n", "unique" to "true", "screen_width" to "1512"),
+            jsonFields("""{"type":"event","path":"C:\\Users\\\"me\"\u000a","unique":true,"screen_width":1512,"metadata":{"a":"b"}}"""))
     }
 }

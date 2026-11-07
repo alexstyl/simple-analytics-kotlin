@@ -10,6 +10,7 @@ Send events and pageviews from your Kotlin app to [Simple Analytics](https://sim
 - **Pageviews for app screens:** see your app's screens in the dashboard's pages report, just like a website.
 - **Country, language and screen reports out of the box:** the computer's timezone, language and screen size are sent automatically.
 - **Accurate visitor counts:** each run of your app counts as one visit, not every screen it shows.
+- **Time on page:** see how long people keep each screen on view, counting only while your app is visible, just like the browser script measures it.
 - **Works offline:** events recorded without a connection wait and are sent once it's back, landing on the day they happened. They can even survive the app quitting.
 - **Never slows down or crashes your app:** events are sent on a background thread. Invalid names, failed requests and network errors are logged and dropped, never thrown.
 - **Shows your app like a browser:** the dashboard lists your app by name, next to Chrome and Safari, with the operating system it ran on.
@@ -61,6 +62,43 @@ analytics.pageview("/settings")
 
 Each screen appears in the dashboard's pages report. Call it from your navigation code rather than from UI code that can run many times for the same screen.
 
+### See how long people spend on each screen
+
+Each screen's time on view is measured from its `pageview()` until the next one, and shows up as time on page in the dashboard's pages report. There's nothing to turn on:
+
+```kotlin
+analytics.pageview("/")          // the devices screen shows; its clock starts
+analytics.pageview("/settings")  // the 42 seconds on / are added to its pageview
+```
+
+`close()` adds the time of the screen on view when the app quits.
+
+### Don't count time while the app is minimised
+
+Only time while your app is on view should count, as browsers only count a visible tab. Tell it when your window is minimised or your app goes to the background by calling `setVisible()`:
+
+```kotlin
+// Compose Desktop, inside your Window { }
+DisposableEffect(window) {
+    val listener = object : WindowAdapter() {
+        override fun windowIconified(e: WindowEvent) = analytics.setVisible(false)
+        override fun windowDeiconified(e: WindowEvent) = analytics.setVisible(true)
+    }
+    window.addWindowListener(listener)
+    onDispose { window.removeWindowListener(listener) }
+}
+```
+
+Hiding sends the time so far, and the clock picks up again when the app is back on view. A window that's open behind another app still counts as on view, as a browser tab on screen does.
+
+### Keep time on page when the app is killed
+
+An app that's force-quit or crashes can't report how long its last screen was on view. To keep a lower bound, pass `pings`, and the time on view is also sent as it passes each of them:
+
+```kotlin
+val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", pings = listOf(5.seconds, 60.seconds))
+```
+
 ### Count visitors
 
 The dashboard counts a visitor for the first pageview each `SimpleAnalytics` sends, so create one when your app starts and use it for the whole run. Its visitors are then your app's runs:
@@ -81,6 +119,8 @@ val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", queueDirect
 ```
 
 Up to 1000 events wait at a time, and events older than 72 hours are dropped. Use one `SimpleAnalytics` per hostname and directory.
+
+Pageviews sent more than a minute after they happened, such as after being offline, keep the time they happened but get no time on page.
 
 ### Send events right before the app quits
 

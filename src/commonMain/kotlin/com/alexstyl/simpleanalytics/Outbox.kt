@@ -21,7 +21,7 @@ import kotlin.time.Instant
  */
 internal class Outbox(
     private val storage: QueueStorage?,
-    private val post: suspend (String) -> Int,
+    private val post: suspend (body: String, at: Instant) -> Int,
     private val clock: () -> Instant,
     private val retryDelay: (attempt: Int) -> Duration,
     private val maxQueued: Int,
@@ -79,7 +79,7 @@ internal class Outbox(
             trim()
             val next = queue.firstOrNull() ?: return
             val status = try {
-                post(next.body)
+                post(next.body, next.at)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
