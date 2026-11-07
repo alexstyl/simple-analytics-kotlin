@@ -263,4 +263,16 @@ class SimpleAnalyticsTest {
         assertFalse(appOnView(listOf(WindowView(showing = false, minimised = false))), "closed")
         assertFalse(appOnView(emptyList()), "no windows")
     }
+
+    @Test fun `quitting sends what's left, including the last screen's time on view`() {
+        val analytics = analytics()
+        analytics.pageview("/")
+        analytics.flushNow()
+        now.set(start + 30.seconds)
+        analytics.track("export_clicked")
+        runBlocking { analytics.closeAndSend(5.seconds) }
+
+        assertEquals(listOf("/", "export_clicked"), names())
+        assertEquals(listOf("30"), appends().map { it.getValue("duration") })
+    }
 }

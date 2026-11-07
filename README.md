@@ -71,7 +71,7 @@ analytics.pageview("/")          // the home screen shows; its clock starts
 analytics.pageview("/settings")  // the 42 seconds on / are added to its pageview
 ```
 
-Only time while your app is on view counts, as browsers only count a visible tab. On desktop the clock pauses by itself while all your app's windows are minimised or closed, and picks up again when one is back. A window that's open behind another app still counts as on view, as a browser tab on screen does. `close()` adds the time of the screen on view when the app quits.
+Only time while your app is on view counts, as browsers only count a visible tab. On desktop the clock pauses by itself while all your app's windows are minimised or closed, and picks up again when one is back. A window that's open behind another app still counts as on view, as a browser tab on screen does. The time of the last screen is sent when the app quits.
 
 ### Keep time on page when the app is killed
 
@@ -106,14 +106,7 @@ Pageviews sent more than a minute after they happened, such as after being offli
 
 ### Send events right before the app quits
 
-Events are sent in the background, so ones recorded right before your app exits can be lost. Wait for them with `flush()` when your app quits, with a timeout so a missing connection can't hold the app up, then `close()`. With a `queueDirectory`, any still waiting are sent on the next run:
-
-```kotlin
-Runtime.getRuntime().addShutdownHook(Thread {
-    runBlocking { withTimeoutOrNull(2.seconds) { analytics.flush() } }
-    analytics.close()
-})
-```
+Events recorded right before your app exits, and the time on view of its last screen, are sent when it quits, with nothing to set up: it waits up to 2 seconds for them, so a missing connection can't hold the app up. With a `queueDirectory`, any that couldn't be sent go on the next run.
 
 ### See which version and system people use
 

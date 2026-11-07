@@ -12,3 +12,9 @@ internal expect fun watchVisibility(onChange: (Boolean) -> Unit): AutoCloseable?
 internal expect fun logWarning(message: String, error: Throwable? = null)
 
 internal expect fun logDebug(message: String, error: Throwable? = null)
+
+/**
+ * Runs [send] when the app quits, where the platform can tell, until the returned handle is closed. Null where it
+ * can't tell.
+ */
+internal expect fun onAppQuit(send: suspend () -> Unit): AutoCloseable?

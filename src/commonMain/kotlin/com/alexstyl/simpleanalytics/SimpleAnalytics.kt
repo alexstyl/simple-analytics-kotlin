@@ -20,6 +20,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
@@ -87,10 +88,14 @@ class SimpleAnalytics internal constructor(
         pings: List<Duration> = emptyList(),
     ) : this(hostname, userAgent, currentDevice(), queueStorage, { delivery -> deliver(userAgent, delivery) }, pings) {
         visibility = watchVisibility(::setVisible)
+        quitHook = onAppQuit { closeAndSend(QuitTimeout) }
     }
 
     /** Follows whether the app is on view, where the platform can tell; closed with this instance. */
     private var visibility: AutoCloseable? = null
+
+    /** Sends what's left when the app quits, where the platform can tell; removed when this instance is closed. */
+    private var quitHook: AutoCloseable? = null
 
     /** Pageviews sent as they happen, by id: only these can have time on page added. Touched only while sending. */
     private val livePages = mutableSetOf<String>()
@@ -155,15 +160,23 @@ class SimpleAnalytics internal constructor(
 
     /**
      * Stops recording without waiting. Events already recorded are still sent in the background, unless Simple
-     * Analytics can't be reached; those stay in the [QueueStorage] for the next run.
+     * Analytics can't be reached; those stay in the [QueueStorage] for the next run. There's usually no need to call
+     * it: when the app quits, what's left is sent for up to 2 seconds by itself.
      */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         runCatching { visibility?.close() }
+        runCatching { quitHook?.close() }
         timers.cancel()
         val current = view.load()
         current.pageId?.let { appendTime(it, current.visibleMillis(now())) }
         outbox.close()
+    }
+
+    /** Closes, then waits up to [timeout] for what's left, including the last screen's time on view, to be sent. */
+    internal suspend fun closeAndSend(timeout: Duration) {
+        close()
+        withTimeoutOrNull(timeout) { flush() }
     }
 
     /** Adds the time [pageId] has been on view to that pageview, when there's at least a second of it. */
@@ -218,6 +231,7 @@ class SimpleAnalytics internal constructor(
         const val MaxQueued = 1000
         val MaxAge = 72.hours
         val LiveWindow = 1.minutes
+        val QuitTimeout = 2.seconds
         const val PageviewPrefix = "{\"type\":\"pageview\""
         const val AppendPrefix = "{\"type\":\"append\""
         val IdField = Regex(",\"id\":\"[^\"]*\"")

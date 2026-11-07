@@ -1,5 +1,6 @@
 package com.alexstyl.simpleanalytics
 
+import kotlinx.coroutines.runBlocking
 import java.awt.AWTEvent
 import java.awt.Frame
 import java.awt.GraphicsEnvironment
@@ -39,4 +40,15 @@ internal actual fun watchVisibility(onChange: (Boolean) -> Unit): AutoCloseable?
     }
     toolkit.addAWTEventListener(listener, AWTEvent.WINDOW_EVENT_MASK or AWTEvent.WINDOW_STATE_EVENT_MASK)
     return AutoCloseable { toolkit.removeAWTEventListener(listener) }
+}
+
+/** A JVM shutdown hook, which runs when the app quits normally, including on Cmd+Q, Ctrl+C or a system shutdown. */
+internal actual fun onAppQuit(send: suspend () -> Unit): AutoCloseable? {
+    val hook = Thread({ runBlocking { send() } }, "SimpleAnalytics quit")
+    return runCatching { Runtime.getRuntime().addShutdownHook(hook) }.map {
+        AutoCloseable {
+            // Fails while the app is already quitting, when the hook is running or about to.
+            runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
+        }
+    }.getOrNull()
 }
