@@ -13,8 +13,8 @@ Send events and pageviews from your Kotlin app to [Simple Analytics](https://sim
 - **Time on page:** see how long people keep each screen on view. Time while the app is minimised doesn't count, with nothing for you to wire up.
 - **Works offline:** events recorded without a connection wait and are sent once it's back, landing on the day they happened. They can even survive the app quitting.
 - **Never slows down or crashes your app:** events are sent on a background thread. Invalid names, failed requests and network errors are logged and dropped, never thrown.
-- **Shows your app like a browser:** the dashboard lists your app by name, next to Chrome and Safari, with the operating system it ran on.
-- **Kotlin Multiplatform:** add it to the common code of projects that target the JVM. It uses Ktor and kotlinx libraries.
+- **Sends what's left when the app quits:** events recorded right before quitting, and the last screen's time, still arrive.
+- **Kotlin Multiplatform:** add it to the common code of projects that target the JVM.
 
 ## Installation
 
@@ -38,7 +38,7 @@ val analytics = SimpleAnalytics(hostname = "app.example.com", appName = "MyApp",
 analytics.track("app_opened")
 ```
 
-`app_opened` shows up in the dashboard's events report for `app.example.com`, along with the visitor's country, language, operating system and screen size. The browser column shows `MyApp`.
+`app_opened` shows up in the dashboard's events report for `app.example.com`, along with the visitor's country, language, operating system and screen size.
 
 ## Examples
 
@@ -71,7 +71,7 @@ analytics.pageview("/")          // the home screen shows; its clock starts
 analytics.pageview("/settings")  // the 42 seconds on / are added to its pageview
 ```
 
-Only time while your app is on view counts, as browsers only count a visible tab. On desktop the clock pauses by itself while all your app's windows are minimised or closed, and picks up again when one is back. A window that's open behind another app still counts as on view, as a browser tab on screen does. The time of the last screen is sent when the app quits.
+Only time while your app is on view counts: on desktop the clock pauses by itself while all your app's windows are minimised or closed. The time of the last screen is sent when the app quits.
 
 ### Keep time on page when the app is killed
 
@@ -103,22 +103,6 @@ val analytics = SimpleAnalytics("app.example.com", "MyApp", "1.0.0", queueDirect
 Up to 1000 events wait at a time, and events older than 72 hours are dropped. Use one `SimpleAnalytics` per hostname and directory.
 
 Pageviews sent more than a minute after they happened, such as after being offline, keep the time they happened but get no time on page.
-
-### Send events right before the app quits
-
-Events recorded right before your app exits, and the time on view of its last screen, are sent when it quits, with nothing to set up: it waits up to 2 seconds for them, so a missing connection can't hold the app up. With a `queueDirectory`, any that couldn't be sent go on the next run.
-
-### See which version and system people use
-
-Every event and pageview carries a user agent made from your app's name and version and the computer it runs on, written the way browsers write theirs:
-
-```
-MyApp/1.0.0 (Macintosh; Mac OS X 15_4; arm64)
-MyApp/1.0.0 (Windows NT 10.0; Win64; x64)
-MyApp/1.0.0 (X11; Linux x86_64)
-```
-
-Simple Analytics reads it like a browser's: the dashboard shows `MyApp` as the browser and macOS, Windows or Linux as the operating system. Pass the version people see, such as `1.4.0`, as `appVersion`.
 
 ## Troubleshooting
 
