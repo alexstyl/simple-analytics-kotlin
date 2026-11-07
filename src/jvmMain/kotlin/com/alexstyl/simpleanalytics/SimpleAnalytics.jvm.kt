@@ -8,9 +8,10 @@ import kotlin.time.Duration
  * Sends events and pageviews to Simple Analytics for [hostname] from a desktop or server app. They carry a user agent
  * built from [appName], [appVersion] and this computer, in the form browsers use, such as
  * `MyApp/1.0.0 (Macintosh; Mac OS X 15_1; arm64)`, so the dashboard shows your app as the browser and the system it ran
- * on. [device] defaults to this computer's settings; null sends none.
+ * on, along with this computer's timezone, language and screen size.
  *
- * [pings] send a screen's time on view as it passes each of them, such as 5 and 60 seconds. See [SimpleAnalytics.setVisible].
+ * Time on page counts only while one of the app's windows is on view. [pings] send a screen's time on view as it
+ * passes each of them, such as 5 and 60 seconds.
  *
  * Events that can't be sent yet are kept in memory. Pass a [queueDirectory], such as your app's data folder, to keep
  * them on disk instead, so they're sent on the app's next run. Use one instance per hostname and directory.
@@ -19,11 +20,10 @@ fun SimpleAnalytics(
     hostname: String,
     appName: String,
     appVersion: String,
-    device: DeviceInfo? = DeviceInfo.current(),
     queueDirectory: File? = null,
     pings: List<Duration> = emptyList(),
 ): SimpleAnalytics =
-    SimpleAnalytics(hostname, userAgent(appName, appVersion), device, queueDirectory?.let { queueFile(it, hostname) }, pings)
+    SimpleAnalytics(hostname, userAgent(appName, appVersion), queueDirectory?.let { queueFile(it, hostname) }, pings)
 
 internal fun queueFile(directory: File, hostname: String) = FileQueueStorage(Path(File(directory, "simple-analytics-$hostname.queue").path))
 

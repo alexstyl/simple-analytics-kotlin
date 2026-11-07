@@ -31,12 +31,7 @@ import kotlin.time.Instant
  * The device's settings that Simple Analytics reports on. It works out the country from [timezone], an IANA id
  * such as `Europe/Athens`. [language] is a language tag such as `en-US`.
  */
-data class DeviceInfo(val timezone: String, val language: String, val screenWidth: Int?, val screenHeight: Int?) {
-    companion object {
-        /** This device's timezone, language and, when it has a display, the size of its main screen. */
-        fun current(): DeviceInfo = currentDevice()
-    }
-}
+internal data class DeviceInfo(val timezone: String, val language: String, val screenWidth: Int?, val screenHeight: Int?)
 
 /**
  * Keeps the events that haven't been sent yet, so they're sent on the app's next run. The queue is opaque text: [write]
@@ -56,7 +51,8 @@ interface QueueStorage {
  * survive the app quitting. Invalid input and events Simple Analytics refuses are logged and dropped.
  *
  * Like Simple Analytics' browser script, it measures how long each screen is on view: from its [pageview] until the
- * next one, counting only time while the app is visible (see [setVisible]). The time is added to that pageview in
+ * next one, counting only time while the app is on view: on desktop, the clock pauses while all its windows are
+ * minimised or closed. The time is added to that pageview in
  * the dashboard's time on page. Pageviews sent more than a minute late, such as after being offline, keep the time they
  * happened instead and get no time on page.
  */
@@ -75,8 +71,8 @@ class SimpleAnalytics internal constructor(
 
     /**
      * [userAgent] tells Simple Analytics which app and system sent the events, in the form browsers use, such as
-     * `MyApp/1.0.0 (Macintosh; Mac OS X 15_1; arm64)`. [device] defaults to this device's
-     * settings; null sends none.
+     * `MyApp/1.0.0 (Macintosh; Mac OS X 15_1; arm64)`. Events also carry this device's timezone, language and screen
+     * size.
      *
      * Events that can't be sent yet are kept in memory. Pass a [queueStorage] to keep them between runs instead.
      * Use one instance per hostname and storage.
@@ -87,10 +83,14 @@ class SimpleAnalytics internal constructor(
     constructor(
         hostname: String,
         userAgent: String,
-        device: DeviceInfo? = DeviceInfo.current(),
         queueStorage: QueueStorage? = null,
         pings: List<Duration> = emptyList(),
-    ) : this(hostname, userAgent, device, queueStorage, { delivery -> deliver(userAgent, delivery) }, pings)
+    ) : this(hostname, userAgent, currentDevice(), queueStorage, { delivery -> deliver(userAgent, delivery) }, pings) {
+        visibility = watchVisibility(::setVisible)
+    }
+
+    /** Follows whether the app is on view, where the platform can tell; closed with this instance. */
+    private var visibility: AutoCloseable? = null
 
     /** Pageviews sent as they happen, by id: only these can have time on page added. Touched only while sending. */
     private val livePages = mutableSetOf<String>()
@@ -132,10 +132,10 @@ class SimpleAnalytics internal constructor(
     }
 
     /**
-     * Tells it whether the app is on view, such as `false` when its window is minimised or it goes to the background,
-     * and `true` when it's back. Only time on view counts towards time on page; hiding also sends the time so far.
+     * Whether the app is on view: `false` once its windows are minimised or it goes to the background, `true` when
+     * it's back. Only time on view counts towards time on page; hiding also sends the time so far.
      */
-    fun setVisible(visible: Boolean) {
+    internal fun setVisible(visible: Boolean) {
         if (closed.load()) return
         val at = now()
         val before = view.fetchAndUpdate {
@@ -159,6 +159,7 @@ class SimpleAnalytics internal constructor(
      */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        runCatching { visibility?.close() }
         timers.cancel()
         val current = view.load()
         current.pageId?.let { appendTime(it, current.visibleMillis(now())) }

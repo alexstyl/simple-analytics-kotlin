@@ -16,6 +16,7 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -253,5 +254,13 @@ class SimpleAnalyticsTest {
     @Test fun `payload fields are read back with escapes undone`() {
         assertEquals(mapOf("type" to "event", "path" to "C:\\Users\\\"me\"\n", "unique" to "true", "screen_width" to "1512"),
             jsonFields("""{"type":"event","path":"C:\\Users\\\"me\"\u000a","unique":true,"screen_width":1512,"metadata":{"a":"b"}}"""))
+    }
+
+    @Test fun `the app is on view while any of its windows shows and isn't minimised`() {
+        assertTrue(appOnView(listOf(WindowView(showing = true, minimised = false))))
+        assertTrue(appOnView(listOf(WindowView(showing = true, minimised = true), WindowView(showing = true, minimised = false))))
+        assertFalse(appOnView(listOf(WindowView(showing = true, minimised = true))), "minimised")
+        assertFalse(appOnView(listOf(WindowView(showing = false, minimised = false))), "closed")
+        assertFalse(appOnView(emptyList()), "no windows")
     }
 }
